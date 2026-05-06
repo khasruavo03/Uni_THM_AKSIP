@@ -1,0 +1,106 @@
+Call/Return Sequence, with and without Arguments and Return Value
+-----------------------------------------------------------------
+
+In the following discussion, the n parameters of a procedure and
+thus the n arguments of a procedure call are numbered from 0 to
+n-1 (from left to right). They are pushed one by one onto the
+stack, but popped all at once with the instruction drop <n>:
+
+drop        ... a0 a1..an-1  -->  ...
+
+The call instruction pushes the address of the next instruction
+after the call (the so-called "return address") onto the stack:
+
+call        ...  -->  ... ra
+
+The return instruction takes this address and continues program
+execution from there:
+
+ret         ... ra  -->  ...
+
+In order to return a value from a function call, a special
+"return value register" is present in the VM. Two additional
+instructions ("pushr" and "popr") transfer a value between
+the stack and the return value register:
+
+pushr       ...  -->  ... rv
+popr        ... rv  -->  ...
+
+
+1) no args, no ret value
+
+   caller site:
+      call <proc addr>
+
+   callee site:
+      asf <num locals>
+      <body>
+      rsf
+      ret
+
+
+2) args, no ret value
+
+   caller site:
+      <push arg 0>
+      ...
+      <push arg n-1>
+      call <proc addr>
+      drop <n>
+
+   callee site:
+      asf <num locals>
+      <body>
+      rsf
+      ret
+
+   access to param variables:
+      pushl/popl with negative offsets relative to fp
+      arg i (0..n-1) of n args is found at fp-2-n+i
+      stack layout:
+      ...
+      fp+1    points to local variable 1
+      fp+0    points to local variable 0
+      fp-1    points to old fp
+      fp-2    points to return address
+      fp-2-1  points to last arg (of n)
+      fp-2-2  points to next to last arg (of n)
+      ...
+      fp-2-n  points to first arg (of n)
+
+
+3) no args, ret value
+
+   caller site:
+      call <proc addr>
+      pushr
+
+   callee site:
+      asf <num locals>
+      <body>
+      <push ret val>
+      popr
+      rsf
+      ret
+
+
+4) args, ret value
+
+   caller site:
+      <push arg 0>
+      ...
+      <push arg n-1>
+      call <proc addr>
+      drop <n>
+      pushr
+
+   callee site:
+      asf <num locals>
+      <body>
+      <push ret val>
+      popr
+      rsf
+      ret
+
+   access to param variables:
+      see 2) above
