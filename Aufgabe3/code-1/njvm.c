@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 // Aufgabe 02
 
@@ -40,16 +41,18 @@
 
 unsigned int *prog;
 int progSize;
+int dataSize = 0;
 int stack[1024];
 int sp = 0;
-int globals[256];
+int data[256];
 int fp = 0;
+int breakpoint = -1;
+int pc = 0;
+int halted = 0; //HALT Variable
 
 // Instruktionen
-void push(int value)
-{
-    if (sp >= 1024)
-    {
+void push(int value) {
+    if (sp >= 1024) {
         fprintf(stderr, "Error: stack overflow\n");
         exit(1);
     }
@@ -57,10 +60,8 @@ void push(int value)
     stack[sp++] = value;
 }
 
-int pop(void)
-{
-    if (sp <= 0)
-    {
+int pop(void) {
+    if (sp <= 0) {
         fprintf(stderr, "Error: stack underflow\n");
         exit(1);
     }
@@ -76,43 +77,38 @@ int pop(void)
            ((x << 24) & 0xFF000000);
 } */
 
-void loadBinaryCode(char *filename) 
-{
+void loadBinaryCode(char *filename) {
     FILE *file = fopen(filename, "rb");
 
-    if (file == NULL) 
-    {
+    if (file == NULL) {
         fprintf(stderr, "Error: Could not open file %s\n", filename);
         exit(1);
     }
 
     unsigned int header[4];
 
-    if (fread(header, sizeof(unsigned int), 4, file) != 4)
-    {
+    if (fread(header, sizeof(unsigned int), 4, file) != 4) {
         fprintf(stderr, "Error: could not read header\n");
         exit(1);
     }
 
-    if (header[0] != 0x46424a4e)
-    {
+    if (header[0] != 0x46424a4e) {
         fprintf(stderr, "Error: wrong file format\n");
         exit(1);
     }
 
     progSize = header[2];
+    dataSize = header[3];
 
     prog = (unsigned int *)malloc(progSize * sizeof(unsigned int));
-    if (prog == NULL) 
-    {
+    if (prog == NULL) {
         fprintf(stderr, "Error: Could not malloc memory for %s.\n", filename);
         exit(1);
     }
     
     size_t bytesRead = fread(prog, sizeof(unsigned int), progSize, file);
 
-    if (bytesRead == 0) 
-    {
+    if (bytesRead == 0) {
         fprintf(stderr, "Error. Could not read from file %s\n", filename);
         exit(1);
     }
@@ -122,24 +118,21 @@ void loadBinaryCode(char *filename)
     fclose(file);
 }
 
-void listProg(void)
-{
-    for (int i = 0; i < progSize; i++) 
-    {
+void listProg(void) {
+    for (int i = 0; i < progSize; i++) {
         // printf("Instruction %d: 0x%08x\n", i, prog[i]);
 
         unsigned int instr = prog[i];
         int opcode = OPCODE(instr);
         int imm = SIGN_EXTEND(IMMEDIATE(instr));
-        printf("%03d: ", i);
+        printf("%04d:   ", i);
 
-        switch (opcode) 
-        {
+        switch (opcode) {
             case 0: 
                 printf("halt\n"); 
                 break;
             case 1:
-                printf("pushc %d\n", imm);
+                printf("pushc   %d\n", imm);
                 break;
             case 2:
                 printf("add\n");
@@ -169,22 +162,22 @@ void listProg(void)
                 printf("wrchr\n");
                 break;
             case 11:
-                printf("pushg %d\n", imm);
+                printf("pushg   %d\n", imm);
                 break;
             case 12: 
-                printf("popg %d\n", imm);
+                printf("popg    %d\n", imm);
                 break;
             case 13:
-                printf("asf %d\n", imm);
+                printf("asf     %d\n", imm);
                 break;
             case 14:
                 printf("rsf\n");
                 break;
             case 15:
-                printf("pushl %d\n", imm);
+                printf("pushl   %d\n", imm);
                 break;
             case 16:
-                printf("popl %d\n", imm);
+                printf("popl    %d\n", imm);
                 break;
             case 17:
                 printf("eq\n");
@@ -205,13 +198,13 @@ void listProg(void)
                 printf("ge\n");
                 break;
             case 23:
-                printf("jmp %d \n", imm);
+                printf("jmp     %d\n", imm);
                 break;
             case 24:
-                printf("brf %d \n", imm);
+                printf("brf     %d\n", imm);
                 break;
             case 25:
-                printf("brt %d \n", imm);
+                printf("brt     %d\n", imm);
                 break;
 
             default:
@@ -219,23 +212,54 @@ void listProg(void)
                 exit(1);
         }
     }
+    printf("        --- end of code ---\n");
 }
 
-void execProg(void)
-{
-    int pc = 0;
-    while (pc < progSize) 
-    {
-        unsigned int instr = prog[pc];
-        int opcode = (instr >> 24) & 0xFF;
-        int imm = (int)SIGN_EXTEND(instr & 0x00FFFFFF);
-        pc++;
+void inspStack(void) {
+    printf("Stack: \n");
+    printf("sp = %d, fp = %d\n", sp, fp);
 
-        int n1, n2;
+    if (sp == 0) {
+        printf("-- empty stack\n");
+        return;
+    }
 
-        switch (opcode) 
+    for (int i= sp - 1; i >= 0; i--) {
+        printf("%04d: %d", i, stack[i]);
+        if (i== fp)
         {
+            printf("    <-- fp");
+        }
+
+        if (i == sp - 1) 
+        {
+            printf("    <-- sp");
+        }
+        printf("\n");
+    }
+
+    printf("-- End of Stack\n");
+}
+
+void inspData(void) {
+    printf("Global Data: \n");
+    for (int i=0; i < 256; i++) {
+        printf("%04d: %d\n", i, data[i]);
+    }
+}
+
+// 
+void execInstr(void) {
+    unsigned int instr = prog[pc];
+    int opcode = (instr >> 24) & 0xFF;
+    int imm = (int)SIGN_EXTEND(instr & 0x00FFFFFF);
+    pc++;
+    int n1, n2;
+    
+    switch (opcode) {
         case HALT:
+            halted = 1;
+            printf("HALT reached\n");
             return;
         case PUSHC:
             push(imm);
@@ -276,15 +300,14 @@ void execProg(void)
             push(n1 % n2);
             break;
         case RDINT:
+        {
             char buffer[256];
+            printf("input> ");
             fgets(buffer, sizeof(buffer), stdin);
             n1 = atoi(buffer);
-
-            // fgets interpretiert \n als leeres Befehl wegen
-            // => scanf("%d", &n1);
-            
             push(n1);
             break;
+        }
         case WRINT:
             n1 = pop();
             printf("%d\n", n1);
@@ -298,10 +321,10 @@ void execProg(void)
             putchar(n1);
             break;
         case PUSHG:
-            push(globals[imm]);
+            push(data[imm]);
             break;
         case POPG:
-            globals[imm] = pop();
+            data[imm] = pop();
             break;
         case ASF:
             push(fp);
@@ -359,40 +382,185 @@ void execProg(void)
             n1 = pop();
             if (n1) {pc = imm;}
             break;
-        }
     }
 }
 
-void debugger(void) 
-{
+void execProg(void) {
+    while (pc < progSize && !halted) {
+        if (pc == breakpoint) {
+            printf("Breakpoint reached at %d\n", pc);
+            return;
+        }
+
+        execInstr();
+
+        // printf("pc=%d opcode=%d imm=%d\n", pc-1, opcode, imm);
+    }
+}
+
+void printCurrentInstr(void) {
+
+    if (pc >= progSize) {
+        printf("Program finished\n");
+        return;
+    }
+
+    unsigned int instr = prog[pc];
+    int opcode = OPCODE(instr);
+    int imm = SIGN_EXTEND(IMMEDIATE(instr));
+
+    printf("%04d:   ", pc);
+
+    switch(opcode) {
+        case HALT:
+            printf("halt");
+            break;
+
+        case PUSHC:
+            printf("pushc   %d", imm);
+            break;
+
+        case RDINT:
+            printf("rdint");
+            break;
+
+        case WRINT:
+            printf("wrint");
+            break;
+
+        case PUSHG:
+            printf("pushg   %d", imm);
+            break;
+
+        case POPG:
+            printf("popg    %d", imm);
+            break;
+
+        case ADD:
+            printf("add");
+            break;
+
+        case SUB:
+            printf("sub");
+            break;
+
+        case MUL:
+            printf("mul");
+            break;
+
+        case DIV:
+            printf("div");
+            break;
+
+        case MOD:
+            printf("mod");
+            break;
+
+        case EQ:
+            printf("eq");
+            break;
+
+        case NE:
+            printf("ne");
+            break;
+
+        case LT:
+            printf("lt");
+            break;
+
+        case LE:
+            printf("le");
+            break;
+
+        case GT:
+            printf("gt");
+            break;
+
+        case GE:
+            printf("ge");
+            break;
+
+        case JMP:
+            printf("jmp     %d", imm);
+            break;
+
+        case BRF:
+            printf("brf     %d", imm);
+            break;
+
+        case BRT:
+            printf("brt     %d", imm);
+            break;
+
+        default:
+            printf("unknown");
+    }
+
+    printf("\n");
+}
+
+// Debugging Methode
+void debugger(void) {
     char command[256];
 
+    printCurrentInstr();
     while (1)
     {
-        printf("(debugger)  [Option: list, run, quit]      :");
-        if (fgets(command, sizeof(command), stdin)) 
-        {
-            if(strcmp(command, "list\n") == 0)
-            {
+        printf("DEBUG: inspect, list, breakpoint, step, run, quit?\n");
+        if (fgets(command, sizeof(command), stdin)) {
+            command[strcspn(command, "\n")] = '\0';
+            if(strncmp(command, "list", 1) == 0) {
                 listProg();
-            }
-            else if (strcmp(command, "run\n") == 0)
-            {
+            } else if (strncmp(command, "run", 1) == 0) {
                 execProg();
-                printf("Program finished\n");
+                if (pc >= progSize || halted) {
+                    printf("Ninja Virtual Machine stopped\n");
+                    break;
+                }
+            } else if (strncmp(command, "quit", 1) == 0) {
                 break;
+            } else if(strncmp(command, "inspect", 1) == 0) {
+                char inspectCmd[256];
+
+                printf("DEBUG: inspect which, stack or data?\n");
+
+                if (fgets(inspectCmd, sizeof(inspectCmd), stdin)) {
+                    inspectCmd[strcspn(inspectCmd, "\n")] = '\0';
+                    if (strncmp(inspectCmd, "stack", 1) == 0) {
+                        inspStack();
+                    } else if (strncmp(inspectCmd, "data", 1) == 0) {
+                        inspData();
+                    }
+                }
+            } else if(strncmp(command, "step", 1) == 0) {
+                if (!halted && pc < progSize) {
+                    execInstr();
+                    printCurrentInstr();
+                }
+            } else if (strncmp(command, "break", 1) == 0) {
+                char input[256];
+
+                if (breakpoint == -1) {
+                    printf("DEBUG [breakpoint]: cleared\n");
+                } else {
+                    printf("DEBUG [breakpoint]: set at %d\n", breakpoint);
+                }
+
+                printf("DEBUG [breakpoint]: address to set, -1 to clear, <ret> for no change?\n");
+
+                if (fgets(input, sizeof(input), stdin)) {
+                    if(strcmp(input, "\n") != 0) {
+                        breakpoint = atoi(input);
+
+                        if (breakpoint == -1) {
+                            printf("DEBUG [breakpoint]: now cleared\n");
+                        } else {
+                            printf("DEBUG [breakpoint]: now set at %d\n", breakpoint);
+                        }
+                    }
+                }
             }
-            else if (strcmp(command, "quit\n") == 0)
-            {
-                break;
-            }
-            else 
-            {
-                printf("Unknown command: %s", command);
-            }
-        }
-        else
-        {
+        } else {
             printf("Error reading commands\n");
             break;
         }
@@ -400,41 +568,35 @@ void debugger(void)
 }
 
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     int debug = 0;
     char *filename;
-
-    printf("Ninja Virtual Machine started\n");
     /* if (argc != 2)
     {
         fprintf(stderr, "Error: no code file specified\n");
         return 1;
     } */
 
-    if(argc == 3 && strcmp(argv[1], "--debug") == 0)
-    {
+    if(argc == 3 && strcmp(argv[2], "--debug") == 0) {
         debug = 1;
-        filename = argv[2];
-    }
-    else if (argc == 2)
+        filename = argv[1];
+    } else if (argc == 2)
     {
         filename = argv[1];
-    }
-    else 
-    {
+    } else {
         fprintf(stderr, "Error: no code file specified\n");
         return 1;
     }
 
-    if (argc == 2 && strcmp(argv[1], "--version") == 0)
-    {
-        printf("Ninja Virtual Machine version 1 (compiled Apr 21 2026)\n");
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        // Momentanes Datum
+        time_t now = time(NULL);
+        time(&now);
+        printf("Ninja Virtual Machine version 1.3 (compiled on %s)\n", ctime(&now));
         return 0;
     }
 
-    if (strcmp(argv[1], "--help") == 0)
-    {
+    if (strcmp(argv[1], "--help") == 0) {
         printf("Usage: %s [--debug] <codefile>\n", argv[0]);
         printf("Options:\n");
         printf("  --debug   Enable debug mode (lists instructions and starts debugger)\n");
@@ -445,19 +607,17 @@ int main(int argc, char *argv[])
 
     loadBinaryCode(filename);
 
-    if (debug) 
-    {
-        printf("Program loaded (%d instructions)\n", progSize);
+    printf("DEBUG: file '%s' loaded (code size = %d, data size = %d)\n", filename, progSize, dataSize);
+    printf("Ninja Virtual Machine started\n");
+
+    if (debug) {
         debugger();
-    }
-    else 
-    {
+    } else {
         execProg();
+        printf("Ninja Virtual Machine stopped\n");
     }
 
     free(prog);
-
-    printf("Ninja Virtual Machine stopped\n");
 
     return 0;
 }
