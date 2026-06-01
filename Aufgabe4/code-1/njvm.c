@@ -1,11 +1,9 @@
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <time.h>
 
-// Aufgabe 02
-
-// VM instruktion
+// VM Instruktion
 #define HALT 0
 #define PUSHC 1
 #define ADD 2
@@ -17,43 +15,55 @@
 #define WRINT 8
 #define RDCHR 9
 #define WRCHR 10
+
 #define PUSHG 11
 #define POPG 12
 #define ASF 13
 #define RSF 14
 #define PUSHL 15
 #define POPL 16
+
 #define EQ 17
 #define NE 18
 #define LT 19
-#define LE 20
+#define LE 20 
 #define GT 21
 #define GE 22
 #define JMP 23
 #define BRF 24
 #define BRT 25
 
-#define OPCODE(i) ((i) >> 24)
+#define CALL 26
+#define RET 27
+#define DROP 28
+#define PUSHR 29
+#define POPR 30
+#define DUP 31
 
-// Immediate in die unteren
+#define OPCODE(i) ((i) >> 24)
 #define IMMEDIATE(x) ((x) & 0x00ffffff)
 #define SIGN_EXTEND(i) (((i) & 0x00800000) ? ((i) | 0xFF000000) : (i))
 
-unsigned int *prog;
-int progSize;
-int dataSize = 0;
-int stack[1024];
-int sp = 0;
-int data[256];
-int fp = 0;
-int breakpoint = -1;
-int pc = 0;
-int halted = 0; //HALT Variable
+// Globe Variable
+unsigned int* prog; //geladene Programmcode
+int progSize; 
 
-// Instruktionen
+int dataSize = 0; // Fröße der globalen Datenbereich
+int stack[1024]; // Stack
+int sp = 0; //Stackpointer
+int data[256]; // Globale Variable
+int fp = 0; //Frame Pointer
+
+int breakpoint = -1; // Breakpoint für Debugger
+int pc = 0; // Program Counter
+int halted = 0; // HALT Flag
+
+int rv = 0; //Return-Value
+
+// Instruktion
 void push(int value) {
     if (sp >= 1024) {
-        fprintf(stderr, "Error: stack overflow\n");
+        fprintf(stderr, "Error: Stack overflow\n");
         exit(1);
     }
 
@@ -62,54 +72,51 @@ void push(int value) {
 
 int pop(void) {
     if (sp <= 0) {
-        fprintf(stderr, "Error: stack underflow\n");
+        fprintf(stderr, "Error: Stack underflow\n");
         exit(1);
     }
 
     return stack[--sp];
 }
 
-/* unsigned int swap32(unsigned int x)
-{
-    return ((x >> 24) & 0x000000FF) |
-           ((x >> 8)  & 0x0000FF00) |
-           ((x << 8)  & 0x00FF0000) |
-           ((x << 24) & 0xFF000000);
-} */
-
+// Laden der Datei
 void loadBinaryCode(char *filename) {
-    FILE *file = fopen(filename, "rb");
+    FILE *file =fopen(filename, "rb");
 
+    // 
     if (file == NULL) {
-        fprintf(stderr, "Error: Could not open file %s\n", filename);
+        fprintf(stderr, "Error: Could not open file %s", filename);
         exit(1);
     }
 
+    // Header lesen
     unsigned int header[4];
-
     if (fread(header, sizeof(unsigned int), 4, file) != 4) {
-        fprintf(stderr, "Error: could not read header\n");
+        fprintf(stderr, "Error: Could not read header\n");
         exit(1);
     }
 
+    // Prüfen auf Magic
     if (header[0] != 0x46424a4e) {
-        fprintf(stderr, "Error: wrong file format\n");
+        fprintf(stderr, "Error: Wrong file format\n");
         exit(1);
     }
 
-    progSize = header[2];
+    progSize = header[2]; 
     dataSize = header[3];
 
+    // Speicher reservieren
     prog = (unsigned int *)malloc(progSize * sizeof(unsigned int));
     if (prog == NULL) {
         fprintf(stderr, "Error: Could not malloc memory for %s.\n", filename);
         exit(1);
     }
-    
+
+    // Einlesen Programm
     size_t bytesRead = fread(prog, sizeof(unsigned int), progSize, file);
 
-    if (bytesRead == 0) {
-        fprintf(stderr, "Error. Could not read from file %s\n", filename);
+    if (bytesRead != (size_t) progSize) {
+        fprintf(stderr, "Error: Could not read from file %s\n", filename);
         exit(1);
     }
 
@@ -119,15 +126,16 @@ void loadBinaryCode(char *filename) {
 }
 
 void listProg(void) {
+    // Gibt als lesbare Assembler-Text aus
     for (int i = 0; i < progSize; i++) {
-        // printf("Instruction %d: 0x%08x\n", i, prog[i]);
+        // printf("Instruction List %d: 0x%08x\n", i, prog[i]);
 
         unsigned int instr = prog[i];
         int opcode = OPCODE(instr);
         int imm = SIGN_EXTEND(IMMEDIATE(instr));
-        printf("%04d:   ", i);
 
-        switch (opcode) {
+        printf("%04d:", i);
+                switch (opcode) {
             case 0: 
                 printf("halt\n"); 
                 break;
@@ -206,19 +214,38 @@ void listProg(void) {
             case 25:
                 printf("brt     %d\n", imm);
                 break;
-
+            case 26:
+                printf("call    %d\n", imm);
+                break;
+            case 27:
+                printf("ret\n");
+                break;
+            case 28:
+                printf("drop    %d\n", imm);
+                break;
+            case 29:
+                printf("pushr\n");
+                break;
+            case 30:
+                printf("popr\n");
+                break;
+            case 31:
+                printf("dup\n");
+                break;
             default:
                 fprintf(stderr, "Error: unknown opcode %d\n",opcode);
                 exit(1);
         }
+    
     }
-    printf("        --- end of code ---\n");
+
+    printf("    --- end of code ---     ");
 }
 
 void inspStack(void) {
     printf("Stack: \n");
     printf("sp = %d, fp = %d\n", sp, fp);
-
+    
     if (sp == 0) {
         printf("-- empty stack\n");
         return;
@@ -259,7 +286,6 @@ void execInstr(void) {
     switch (opcode) {
         case HALT:
             halted = 1;
-            printf("HALT reached\n");
             return;
         case PUSHC:
             push(imm);
@@ -302,15 +328,17 @@ void execInstr(void) {
         case RDINT:
         {
             char buffer[256];
-            printf("input> ");
-            fgets(buffer, sizeof(buffer), stdin);
+            if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+                fprintf(stderr, "Error: Could not read input\n");
+                exit(1);
+            }
             n1 = atoi(buffer);
             push(n1);
             break;
         }
         case WRINT:
             n1 = pop();
-            printf("%d\n", n1);
+            printf("%d", n1);
             break;
         case RDCHR:
             n1 = getchar();
@@ -321,26 +349,52 @@ void execInstr(void) {
             putchar(n1);
             break;
         case PUSHG:
+            if (imm < 0 || imm >= dataSize) {
+                fprintf(stderr, "Error: Illegal global variable index\n");
+                exit(1);
+            }
             push(data[imm]);
             break;
         case POPG:
+            if (imm < 0 || imm >= dataSize) {
+                fprintf(stderr, "Error: Illegal global variable index\n");
+                exit(1);
+            }
             data[imm] = pop();
             break;
         case ASF:
             push(fp);
             fp = sp;
+
+            if (sp + imm >= 1024) {
+                fprintf(stderr, "Error: Stack Overflow\n");
+                exit(1);
+            }
             sp = sp + imm;
             break;
         case RSF:
             sp = fp;
             fp = pop();
             break;
-        case PUSHL:
-            push(stack[fp + imm]);
+        case PUSHL: {
+            int addr = fp + imm;
+
+            if (addr < 0 || addr >= sp) {
+                fprintf(stderr, "Error: Illegal stack access\n");
+                exit(1);
+            }
+            push(stack[addr]);
             break;
-        case POPL:
-            stack[fp + imm] = pop();
+        }
+        case POPL: {
+            int addr = fp + imm;
+            if (addr < 0 || addr >= sp) {
+                fprintf(stderr, "Error: Illegal stack access\n");
+                exit(1);
+            }
+            stack[addr] = pop();
             break;
+        }
         case EQ:
             n2 = pop();
             n1 = pop();
@@ -382,7 +436,31 @@ void execInstr(void) {
             n1 = pop();
             if (n1) {pc = imm;}
             break;
-
+        case CALL:
+            push(pc);
+            pc = imm;
+            break;
+        case RET:
+            pc = pop();
+            break;
+        case DROP:
+            if (sp - imm < 0) {
+                fprintf(stderr, "Error: Stack underflow\n");
+                exit(1);
+            }
+            sp = sp - imm;
+            break;
+        case PUSHR:
+            push(rv);
+            break;
+        case POPR:
+            rv = pop();
+            break;
+        case DUP:
+            n1 = pop();
+            push(n1);
+            push(n1);
+            break; 
     }
 }
 
@@ -492,6 +570,25 @@ void printCurrentInstr(void) {
         case BRT:
             printf("brt     %d", imm);
             break;
+                    case 26:
+                printf("call    %d", imm);
+                break;
+            case 27:
+                printf("ret");
+                break;
+            case 28:
+                printf("drop    %d", imm);
+                break;
+            case 29:
+                printf("pushr");
+                break;
+            case 30:
+                printf("popr");
+                break;
+            case 31:
+                printf("dup");
+                break;
+
 
         default:
             printf("unknown");
@@ -570,30 +667,19 @@ void debugger(void) {
 
 
 int main(int argc, char *argv[]) {
-    int debug = 0;
-    char *filename;
     /* if (argc != 2)
     {
         fprintf(stderr, "Error: no code file specified\n");
         return 1;
     } */
 
-    if(argc == 3 && strcmp(argv[2], "--debug") == 0) {
-        debug = 1;
-        filename = argv[1];
-    } else if (argc == 2)
-    {
-        filename = argv[1];
-    } else {
-        fprintf(stderr, "Error: no code file specified\n");
-        return 1;
-    }
+      printf("Ninja Virtual Machine started\n");
 
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
         // Momentanes Datum
         time_t now = time(NULL);
         time(&now);
-        printf("Ninja Virtual Machine version 1.3 (compiled on %s)\n", ctime(&now));
+        printf("Ninja Virtual Machine version 4 (compiled on %s)\n", ctime(&now));
         return 0;
     }
 
@@ -606,12 +692,24 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    int debug = 0;
+    char *filename;
+
+    if(argc == 3 && strcmp(argv[2], "--debug") == 0) {
+        debug = 1;
+        filename = argv[1];
+    } else if (argc == 2)
+    {
+        filename = argv[1];
+    } else {
+        fprintf(stderr, "Error: no code file specified\n");
+        return 1;
+    }
+
     loadBinaryCode(filename);
 
-    printf("DEBUG: file '%s' loaded (code size = %d, data size = %d)\n", filename, progSize, dataSize);
-    printf("Ninja Virtual Machine started\n");
-
     if (debug) {
+        printf("DEBUG: file '%s' loaded (code size = %d, data size = %d)\n", filename, progSize, dataSize);
         debugger();
     } else {
         execProg();
@@ -622,4 +720,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-

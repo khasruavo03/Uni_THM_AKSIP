@@ -79,7 +79,7 @@ Aber schön der Reihe nach...
 
 6. Implementieren Sie die Instruktion `dup`, die den obersten Stackeintrag dupliziert: `... n --> ... n n`
 
-7. Der zu dieser Aufgabenstellung gehörende Assembler ist natürlich auch verfügbar: link:{includedir}nja[nja]
+7. Der zu dieser Aufgabenstellung gehörende Assemblesr ist natürlich auch verfügbar: link:{includedir}nja[nja]
 
 8. Zu guter Letzt hier wieder die Referenzimplementierung: link:{includedir}njvm[]
 
