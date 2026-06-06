@@ -1,11 +1,10 @@
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <time.h>
 
-// Aufgabe 02
-
-// VM instruktion
+// VM Instruktion
 #define HALT 0
 #define PUSHC 1
 #define ADD 2
@@ -17,99 +16,176 @@
 #define WRINT 8
 #define RDCHR 9
 #define WRCHR 10
+
 #define PUSHG 11
 #define POPG 12
 #define ASF 13
 #define RSF 14
 #define PUSHL 15
 #define POPL 16
+
 #define EQ 17
 #define NE 18
 #define LT 19
-#define LE 20
+#define LE 20 
 #define GT 21
 #define GE 22
 #define JMP 23
 #define BRF 24
 #define BRT 25
 
-#define OPCODE(i) ((i) >> 24)
+#define CALL 26
+#define RET 27
+#define DROP 28
+#define PUSHR 29
+#define POPR 30
+#define DUP 31
 
-// Immediate in die unteren
+#define OPCODE(i) ((i) >> 24)
 #define IMMEDIATE(x) ((x) & 0x00ffffff)
 #define SIGN_EXTEND(i) (((i) & 0x00800000) ? ((i) | 0xFF000000) : (i))
 
-unsigned int *prog;
-int progSize;
-int dataSize = 0;
-int stack[1024];
-int sp = 0;
-int data[256];
-int fp = 0;
-int breakpoint = -1;
-int pc = 0;
-int halted = 0; //HALT Variable
+// Globe Variable
+unsigned int* prog; // geladene Programmcode
+int progSize; 
 
-// Instruktionen
-void push(int value) {
-    if (sp >= 1024) {
-        fprintf(stderr, "Error: stack overflow\n");
+typedef struct {
+    int value;
+} ObjRef;
+
+typedef struct {
+    int is_ref;
+    union {
+        ObjRef *ref;
+        int raw;
+    } value;
+} StackSlot;
+
+ObjRef *newInt(int value) {
+    ObjRef *obj = malloc(sizeof(ObjRef));
+
+    if (obj == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
         exit(1);
     }
 
-    stack[sp++] = value;
+    obj->value = value;
+    return obj;
 }
 
-int pop(void) {
-    if (sp <= 0) {
-        fprintf(stderr, "Error: stack underflow\n");
+ObjRef **data = NULL; // Globale Variable
+int dataSize = 0; // Größe der globalen Datenbereich
+StackSlot stack[1024]; // Stack
+int sp = 0; // Stackpointer
+int fp = 0; // Frame Pointer
+
+int breakpoint = -1; // Breakpoint für Debugger
+int pc = 0; // Program Counter
+int halted = 0; // HALT Flag
+
+ObjRef *rv = NULL; // Return-Value
+
+void pushRaw(int value) {
+    if (sp >= 1024) {
+        fprintf(stderr, "Error: Stack overflow\n");
         exit(1);
     }
+    stack[sp].is_ref = 0;
+    stack[sp].value.raw = value;
+    sp++;
+}
 
+void pushRef(ObjRef *ref) {
+    if (sp >= 1024) {
+        fprintf(stderr, "Error: Stack overflow\n");
+        exit(1);
+    }
+    stack[sp].is_ref = 1;
+    stack[sp].value.ref = ref;
+    sp++;
+}
+
+void pushSlot(StackSlot slot) {
+    if (sp >= 1024) {
+        fprintf(stderr, "Error: Stack overflow\n");
+        exit(1);
+    }
+    stack[sp++] = slot;
+}
+
+StackSlot popSlot(void) {
+    if (sp <= 0) {
+        fprintf(stderr, "Error: Stack underflow\n");
+        exit(1);
+    }
     return stack[--sp];
 }
 
-/* unsigned int swap32(unsigned int x)
-{
-    return ((x >> 24) & 0x000000FF) |
-           ((x >> 8)  & 0x0000FF00) |
-           ((x << 8)  & 0x00FF0000) |
-           ((x << 24) & 0xFF000000);
-} */
+int popRaw(void) {
+    StackSlot slot = popSlot();
+    if (slot.is_ref) {
+        fprintf(stderr, "Error: Expected raw integer on stack, found object reference\n");
+        exit(1);
+    }
+    return slot.value.raw;
+}
 
+ObjRef *popRef(void) {
+    StackSlot slot = popSlot();
+    if (!slot.is_ref) {
+        fprintf(stderr, "Error: Expected object reference on stack, found raw integer\n");
+        exit(1);
+    }
+    return slot.value.ref;
+}
+
+// Laden der Datei
 void loadBinaryCode(char *filename) {
-    FILE *file = fopen(filename, "rb");
+    FILE *file =fopen(filename, "rb");
 
+    // 
     if (file == NULL) {
-        fprintf(stderr, "Error: Could not open file %s\n", filename);
+        fprintf(stderr, "Error: Could not open file %s", filename);
         exit(1);
     }
 
+    // Header lesen
     unsigned int header[4];
-
     if (fread(header, sizeof(unsigned int), 4, file) != 4) {
-        fprintf(stderr, "Error: could not read header\n");
+        fprintf(stderr, "Error: Could not read header\n");
         exit(1);
     }
 
+    // Prüfen auf Magic
     if (header[0] != 0x46424a4e) {
-        fprintf(stderr, "Error: wrong file format\n");
+        fprintf(stderr, "Error: Wrong file format\n");
         exit(1);
     }
 
     progSize = header[2];
     dataSize = header[3];
 
+    data = malloc(sizeof(ObjRef *) * dataSize);
+    if (data == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        exit(1);
+    }
+    for (int i = 0; i < dataSize; i++) {
+        data[i] = newInt(0);
+    }
+
+    // Speicher reservieren
     prog = (unsigned int *)malloc(progSize * sizeof(unsigned int));
     if (prog == NULL) {
         fprintf(stderr, "Error: Could not malloc memory for %s.\n", filename);
         exit(1);
     }
-    
+
+    // Einlesen Programm
     size_t bytesRead = fread(prog, sizeof(unsigned int), progSize, file);
 
-    if (bytesRead == 0) {
-        fprintf(stderr, "Error. Could not read from file %s\n", filename);
+    if (bytesRead != (size_t) progSize) {
+        fprintf(stderr, "Error: Could not read from file %s\n", filename);
         exit(1);
     }
 
@@ -119,15 +195,16 @@ void loadBinaryCode(char *filename) {
 }
 
 void listProg(void) {
+    // Gibt als lesbare Assembler-Text aus
     for (int i = 0; i < progSize; i++) {
-        // printf("Instruction %d: 0x%08x\n", i, prog[i]);
+        // printf("Instruction List %d: 0x%08x\n", i, prog[i]);
 
         unsigned int instr = prog[i];
         int opcode = OPCODE(instr);
         int imm = SIGN_EXTEND(IMMEDIATE(instr));
-        printf("%04d:   ", i);
 
-        switch (opcode) {
+        printf("%04d:", i);
+                switch (opcode) {
             case 0: 
                 printf("halt\n"); 
                 break;
@@ -206,33 +283,55 @@ void listProg(void) {
             case 25:
                 printf("brt     %d\n", imm);
                 break;
-
+            case 26:
+                printf("call    %d\n", imm);
+                break;
+            case 27:
+                printf("ret\n");
+                break;
+            case 28:
+                printf("drop    %d\n", imm);
+                break;
+            case 29:
+                printf("pushr\n");
+                break;
+            case 30:
+                printf("popr\n");
+                break;
+            case 31:
+                printf("dup\n");
+                break;
             default:
                 fprintf(stderr, "Error: unknown opcode %d\n",opcode);
                 exit(1);
         }
+    
     }
-    printf("        --- end of code ---\n");
+
+    printf("    --- end of code ---     ");
 }
 
 void inspStack(void) {
     printf("Stack: \n");
     printf("sp = %d, fp = %d\n", sp, fp);
-
+    
     if (sp == 0) {
         printf("-- empty stack\n");
         return;
     }
 
-    for (int i= sp - 1; i >= 0; i--) {
-        printf("%04d: %d", i, stack[i]);
-        if (i== fp)
-        {
+    for (int i = sp - 1; i >= 0; i--) {
+        if (stack[i].is_ref) {
+            printf("%04d: obj@%p value=%d", i, (void *)stack[i].value.ref, stack[i].value.ref->value);
+        } else {
+            printf("%04d: raw=%d", i, stack[i].value.raw);
+        }
+
+        if (i == fp) {
             printf("    <-- fp");
         }
 
-        if (i == sp - 1) 
-        {
+        if (i == sp - 1) {
             printf("    <-- sp");
         }
         printf("\n");
@@ -243,9 +342,44 @@ void inspStack(void) {
 
 void inspData(void) {
     printf("Global Data: \n");
-    for (int i=0; i < 256; i++) {
-        printf("%04d: %d\n", i, data[i]);
+    for (int i = 0; i < dataSize; i++) {
+        if (data[i] != NULL) {
+            printf("%04d: obj@%p value=%d\n", i, (void *)data[i], data[i]->value);
+        } else {
+            printf("%04d: NULL\n", i);
+        }
     }
+}
+
+void inspObject(ObjRef *obj) {
+    if (obj == NULL) {
+        printf("NULL pointer\n");
+        return;
+    }
+    printf("Object at %p:\n", (void *)obj);
+    printf("  value: %d\n", obj->value);
+}
+
+void inspObjectByAddr(void) {
+    char buffer[256];
+    unsigned long addr;
+
+    printf("DEBUG [object]: Enter object address in hex (0x...) or decimal: ");
+    if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+        printf("Error reading input\n");
+        return;
+    }
+
+    buffer[strcspn(buffer, "\n")] = '\0';
+
+    if (strncmp(buffer, "0x", 2) == 0) {
+        sscanf(buffer, "%lx", &addr);
+    } else {
+        sscanf(buffer, "%lu", &addr);
+    }
+
+    ObjRef *obj = (ObjRef *)addr;
+    inspObject(obj);
 }
 
 // 
@@ -254,133 +388,192 @@ void execInstr(void) {
     int opcode = (instr >> 24) & 0xFF;
     int imm = (int)SIGN_EXTEND(instr & 0x00FFFFFF);
     pc++;
-    int n1, n2;
+    ObjRef *o1, *o2;
     
     switch (opcode) {
         case HALT:
             halted = 1;
-            printf("HALT reached\n");
             return;
         case PUSHC:
-            push(imm);
+            pushRef(newInt(imm));
             break;
         case ADD:
-            n2 = pop();
-            n1 = pop();
-            push(n1 + n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value + o2->value));
             break;
         case SUB:
-            n2 = pop();
-            n1 = pop();
-            push(n1 - n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value - o2->value));
             break;
         case MUL:
-            n2 = pop();
-            n1 = pop();
-            push(n2 * n1);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value * o2->value));
             break;
         case DIV:
-            n2 = pop();
-            n1 = pop();
-            if (n2 == 0) 
-            {
+            o2 = popRef();
+            o1 = popRef();
+            if (o2->value == 0) {
                 fprintf(stderr, "Error: Division by Zero\n");
                 exit(1);
             }
-            push(n1 / n2);
+            pushRef(newInt(o1->value / o2->value));
             break;
         case MOD:
-            n2 = pop();
-            n1 = pop();
-            if (n2 == 0) 
-            {
+            o2 = popRef();
+            o1 = popRef();
+            if (o2->value == 0) {
                 fprintf(stderr, "Error: Modulo by Zero\n");
                 exit(1);
             }
-            push(n1 % n2);
+            pushRef(newInt(o1->value % o2->value));
             break;
-        case RDINT:
-        {
+        case RDINT: {
             char buffer[256];
-            printf("input> ");
-            fgets(buffer, sizeof(buffer), stdin);
-            n1 = atoi(buffer);
-            push(n1);
+            if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+                fprintf(stderr, "Error: Could not read input\n");
+                exit(1);
+            }
+            int value = atoi(buffer);
+            pushRef(newInt(value));
             break;
         }
         case WRINT:
-            n1 = pop();
-            printf("%d\n", n1);
+            o1 = popRef();
+            printf("%d", o1->value);
             break;
         case RDCHR:
-            n1 = getchar();
-            push(n1);
+            o1 = newInt(getchar());
+            pushRef(o1);
             break;
         case WRCHR:
-            n1 = pop();
-            putchar(n1);
+            o1 = popRef();
+            putchar(o1->value);
             break;
         case PUSHG:
-            push(data[imm]);
+            if (imm < 0 || imm >= dataSize) {
+                fprintf(stderr, "Error: Illegal global variable index\n");
+                exit(1);
+            }
+            pushRef(data[imm]);
             break;
         case POPG:
-            data[imm] = pop();
+            if (imm < 0 || imm >= dataSize) {
+                fprintf(stderr, "Error: Illegal global variable index\n");
+                exit(1);
+            }
+            data[imm] = popRef();
             break;
         case ASF:
-            push(fp);
+            pushRaw(fp);
             fp = sp;
-            sp = sp + imm;
+            if (sp + imm >= 1024) {
+                fprintf(stderr, "Error: Stack Overflow\n");
+                exit(1);
+            }
+            for (int i = sp; i < sp + imm; i++) {
+                stack[i].is_ref = 0;
+                stack[i].value.raw = 0;
+            }
+            sp += imm;
             break;
         case RSF:
             sp = fp;
-            fp = pop();
+            fp = popRaw();
             break;
-        case PUSHL:
-            push(stack[fp + imm]);
+        case PUSHL: {
+            int addr = fp + imm;
+            if (addr < 0 || addr >= sp) {
+                fprintf(stderr, "Error: Illegal stack access\n");
+                exit(1);
+            }
+            pushSlot(stack[addr]);
             break;
-        case POPL:
-            stack[fp + imm] = pop();
+        }
+        case POPL: {
+            int addr = fp + imm;
+            if (addr < 0 || addr >= sp) {
+                fprintf(stderr, "Error: Illegal stack access\n");
+                exit(1);
+            }
+            stack[addr] = popSlot();
             break;
+        }
         case EQ:
-            n2 = pop();
-            n1 = pop();
-            push(n1 == n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value == o2->value));
             break;
         case NE:
-            n2 = pop();
-            n1 = pop();
-            push(n1 != n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value != o2->value));
             break;
         case LT:
-            n2 = pop();
-            n1 = pop();
-            push(n1 < n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value < o2->value));
             break;
         case LE:
-            n2 = pop(); 
-            n1=pop();
-            push(n1 <= n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value <= o2->value));
             break;
         case GT:
-            n2=pop();
-            n1=pop();
-            push(n1 > n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value > o2->value));
             break;
         case GE:
-            n2= pop();
-            n1= pop();
-            push(n1 >= n2);
+            o2 = popRef();
+            o1 = popRef();
+            pushRef(newInt(o1->value >= o2->value));
             break;
         case JMP:
             pc = imm;
             break;
         case BRF:
-            n1 = pop();
-            if (!n1) { pc = imm;}
+            o1 = popRef();
+            if (o1->value == 0) {
+                pc = imm;
+            }
             break;
         case BRT:
-            n1 = pop();
-            if (n1) {pc = imm;}
+            o1 = popRef();
+            if (o1->value != 0) {
+                pc = imm;
+            }
+            break;
+        case CALL:
+            pushRaw(pc);
+            pc = imm;
+            break;
+        case RET:
+            pc = popRaw();
+            break;
+        case DROP:
+            if (sp - imm < 0) {
+                fprintf(stderr, "Error: Stack underflow\n");
+                exit(1);
+            }
+            sp = sp - imm;
+            break;
+        case PUSHR:
+            if (rv == NULL) {
+                fprintf(stderr, "Error: Return value register is empty\n");
+                exit(1);
+            }
+            pushRef(rv);
+            break;
+        case POPR:
+            rv = popRef();
+            break;
+        case DUP:
+            o1 = popRef();
+            pushRef(o1);
+            pushRef(o1);
             break;
     }
 }
@@ -491,6 +684,25 @@ void printCurrentInstr(void) {
         case BRT:
             printf("brt     %d", imm);
             break;
+                    case 26:
+                printf("call    %d", imm);
+                break;
+            case 27:
+                printf("ret");
+                break;
+            case 28:
+                printf("drop    %d", imm);
+                break;
+            case 29:
+                printf("pushr");
+                break;
+            case 30:
+                printf("popr");
+                break;
+            case 31:
+                printf("dup");
+                break;
+
 
         default:
             printf("unknown");
@@ -506,7 +718,7 @@ void debugger(void) {
     printCurrentInstr();
     while (1)
     {
-        printf("DEBUG: inspect, list, breakpoint, step, run, quit?\n");
+        printf("DEBUG: inspect, object, list, breakpoint, step, run, quit?\n");
         if (fgets(command, sizeof(command), stdin)) {
             command[strcspn(command, "\n")] = '\0';
             if(strncmp(command, "list", 1) == 0) {
@@ -519,10 +731,12 @@ void debugger(void) {
                 }
             } else if (strncmp(command, "quit", 1) == 0) {
                 break;
+            } else if(strncmp(command, "object", 1) == 0) {
+                inspObjectByAddr();
             } else if(strncmp(command, "inspect", 1) == 0) {
                 char inspectCmd[256];
 
-                printf("DEBUG: inspect which, stack or data?\n");
+                printf("DEBUG: inspect what? stack, data, or object?\n");
 
                 if (fgets(inspectCmd, sizeof(inspectCmd), stdin)) {
                     inspectCmd[strcspn(inspectCmd, "\n")] = '\0';
@@ -530,6 +744,8 @@ void debugger(void) {
                         inspStack();
                     } else if (strncmp(inspectCmd, "data", 1) == 0) {
                         inspData();
+                    } else if (strncmp(inspectCmd, "object", 1) == 0) {
+                        inspObjectByAddr();
                     }
                 }
             } else if(strncmp(command, "step", 1) == 0) {
@@ -569,13 +785,33 @@ void debugger(void) {
 
 
 int main(int argc, char *argv[]) {
-    int debug = 0;
-    char *filename;
     /* if (argc != 2)
     {
         fprintf(stderr, "Error: no code file specified\n");
         return 1;
     } */
+
+      printf("Ninja Virtual Machine started\n");
+
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        // Momentanes Datum
+        time_t now = time(NULL);
+        time(&now);
+        printf("Ninja Virtual Machine version 5 (compiled on %s)\n", ctime(&now));
+        return 0;
+    }
+
+    if (argc == 2  && strcmp(argv[1], "--help") == 0) {
+        printf("Usage: %s [--debug] <codefile>\n", argv[0]);
+        printf("Options:\n");
+        printf("  --debug   Enable debug mode (lists instructions and starts debugger)\n");
+        printf("  --version Show version information\n");
+        printf("  --help    Show this help message\n");
+        return 0;
+    }
+
+    int debug = 0;
+    char *filename;
 
     if(argc == 3 && strcmp(argv[2], "--debug") == 0) {
         debug = 1;
@@ -588,29 +824,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-        // Momentanes Datum
-        time_t now = time(NULL);
-        time(&now);
-        printf("Ninja Virtual Machine version 1.3 (compiled on %s)\n", ctime(&now));
-        return 0;
-    }
-
-    if (strcmp(argv[1], "--help") == 0) {
-        printf("Usage: %s [--debug] <codefile>\n", argv[0]);
-        printf("Options:\n");
-        printf("  --debug   Enable debug mode (lists instructions and starts debugger)\n");
-        printf("  --version Show version information\n");
-        printf("  --help    Show this help message\n");
-        return 0;
-    }
-
     loadBinaryCode(filename);
 
-    printf("DEBUG: file '%s' loaded (code size = %d, data size = %d)\n", filename, progSize, dataSize);
-    printf("Ninja Virtual Machine started\n");
-
     if (debug) {
+        printf("DEBUG: file '%s' loaded (code size = %d, data size = %d)\n", filename, progSize, dataSize);
         debugger();
     } else {
         execProg();
@@ -621,4 +838,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
