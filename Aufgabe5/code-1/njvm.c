@@ -50,30 +50,33 @@ unsigned int* prog; // geladene Programmcode
 int progSize; 
 
 typedef struct {
-    int value;
-} ObjRef;
+    unsigned int size;
+    unsigned char data[1];
+} *ObjRef;
 
 typedef struct {
     int is_ref;
     union {
-        ObjRef *ref;
-        int raw;
+        ObjRef objRef;
+        int number;
     } value;
 } StackSlot;
 
-ObjRef *newInt(int value) {
-    ObjRef *obj = malloc(sizeof(ObjRef));
+ObjRef newInt(int value) {
+    ObjRef obj;
+    obj = malloc(sizeof(unsigned int) + sizeof(int));
 
     if (obj == NULL) {
         fprintf(stderr, "Error: out of memory\n");
         exit(1);
     }
 
-    obj->value = value;
+    obj->size = sizeof(int);
+    *(int *) obj->data = value;
     return obj;
 }
 
-ObjRef **data = NULL; // Globale Variable
+ObjRef *data = NULL; // Globale Variable
 int dataSize = 0; // Größe der globalen Datenbereich
 StackSlot stack[1024]; // Stack
 int sp = 0; // Stackpointer
@@ -83,7 +86,7 @@ int breakpoint = -1; // Breakpoint für Debugger
 int pc = 0; // Program Counter
 int halted = 0; // HALT Flag
 
-ObjRef *rv = NULL; // Return-Value
+ObjRef rv = NULL; // Return-Value
 
 void pushRaw(int value) {
     if (sp >= 1024) {
@@ -91,17 +94,17 @@ void pushRaw(int value) {
         exit(1);
     }
     stack[sp].is_ref = 0;
-    stack[sp].value.raw = value;
+    stack[sp].value.number = value;
     sp++;
 }
 
-void pushRef(ObjRef *ref) {
+void pushRef(ObjRef ref) {
     if (sp >= 1024) {
         fprintf(stderr, "Error: Stack overflow\n");
         exit(1);
     }
     stack[sp].is_ref = 1;
-    stack[sp].value.ref = ref;
+    stack[sp].value.objRef = ref;
     sp++;
 }
 
@@ -127,16 +130,16 @@ int popRaw(void) {
         fprintf(stderr, "Error: Expected raw integer on stack, found object reference\n");
         exit(1);
     }
-    return slot.value.raw;
+    return slot.value.number;
 }
 
-ObjRef *popRef(void) {
+ObjRef popRef(void) {
     StackSlot slot = popSlot();
     if (!slot.is_ref) {
         fprintf(stderr, "Error: Expected object reference on stack, found raw integer\n");
         exit(1);
     }
-    return slot.value.ref;
+    return slot.value.objRef;
 }
 
 // Laden der Datei
@@ -165,7 +168,7 @@ void loadBinaryCode(char *filename) {
     progSize = header[2];
     dataSize = header[3];
 
-    data = malloc(sizeof(ObjRef *) * dataSize);
+    data = malloc(sizeof(ObjRef) * dataSize);
     if (data == NULL) {
         fprintf(stderr, "Error: out of memory\n");
         exit(1);
@@ -322,9 +325,10 @@ void inspStack(void) {
 
     for (int i = sp - 1; i >= 0; i--) {
         if (stack[i].is_ref) {
-            printf("%04d: obj@%p value=%d", i, (void *)stack[i].value.ref, stack[i].value.ref->value);
+            int val = *(int *)stack[i].value.objRef->data;
+            printf("%04d: obj@%p value=%d", i, (void *)stack[i].value.objRef, val);
         } else {
-            printf("%04d: raw=%d", i, stack[i].value.raw);
+            printf("%04d: number =%d", i, stack[i].value.number);
         }
 
         if (i == fp) {
@@ -344,20 +348,21 @@ void inspData(void) {
     printf("Global Data: \n");
     for (int i = 0; i < dataSize; i++) {
         if (data[i] != NULL) {
-            printf("%04d: obj@%p value=%d\n", i, (void *)data[i], data[i]->value);
+            int val = *(int *)data[i]->data;
+            printf("%04d: obj@%p value=%d\n", i, (void *)data[i], val);
         } else {
             printf("%04d: NULL\n", i);
         }
     }
 }
 
-void inspObject(ObjRef *obj) {
+void inspObject(ObjRef obj) {
     if (obj == NULL) {
         printf("NULL pointer\n");
         return;
     }
     printf("Object at %p:\n", (void *)obj);
-    printf("  value: %d\n", obj->value);
+    printf("  value: %d\n", *(int *)obj->data);
 }
 
 void inspObjectByAddr(void) {
@@ -378,7 +383,7 @@ void inspObjectByAddr(void) {
         sscanf(buffer, "%lu", &addr);
     }
 
-    ObjRef *obj = (ObjRef *)addr;
+    ObjRef obj = (ObjRef)addr;
     inspObject(obj);
 }
 
@@ -388,7 +393,7 @@ void execInstr(void) {
     int opcode = (instr >> 24) & 0xFF;
     int imm = (int)SIGN_EXTEND(instr & 0x00FFFFFF);
     pc++;
-    ObjRef *o1, *o2;
+    ObjRef o1, o2;
     
     switch (opcode) {
         case HALT:
@@ -400,35 +405,35 @@ void execInstr(void) {
         case ADD:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value + o2->value));
+            pushRef(newInt((*(int *)o1->data) + (*(int *)o2->data)));
             break;
         case SUB:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value - o2->value));
+            pushRef(newInt((*(int *)o1->data) - (*(int *)o2->data)));
             break;
         case MUL:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value * o2->value));
+            pushRef(newInt((*(int *)o1->data) * (*(int *)o2->data)));
             break;
         case DIV:
             o2 = popRef();
             o1 = popRef();
-            if (o2->value == 0) {
+            if (*(int *)o2->data == 0) {
                 fprintf(stderr, "Error: Division by Zero\n");
                 exit(1);
             }
-            pushRef(newInt(o1->value / o2->value));
+            pushRef(newInt((*(int *)o1->data) / (*(int *)o2->data)));
             break;
         case MOD:
             o2 = popRef();
             o1 = popRef();
-            if (o2->value == 0) {
+            if (*(int *)o2->data == 0) {
                 fprintf(stderr, "Error: Modulo by Zero\n");
                 exit(1);
             }
-            pushRef(newInt(o1->value % o2->value));
+            pushRef(newInt((*(int *)o1->data) % (*(int *)o2->data)));
             break;
         case RDINT: {
             char buffer[256];
@@ -442,7 +447,7 @@ void execInstr(void) {
         }
         case WRINT:
             o1 = popRef();
-            printf("%d", o1->value);
+            printf("%d", *(int *)o1->data);
             break;
         case RDCHR:
             o1 = newInt(getchar());
@@ -450,7 +455,7 @@ void execInstr(void) {
             break;
         case WRCHR:
             o1 = popRef();
-            putchar(o1->value);
+            putchar(*(int *)o1->data);
             break;
         case PUSHG:
             if (imm < 0 || imm >= dataSize) {
@@ -474,8 +479,8 @@ void execInstr(void) {
                 exit(1);
             }
             for (int i = sp; i < sp + imm; i++) {
-                stack[i].is_ref = 0;
-                stack[i].value.raw = 0;
+                stack[i].is_ref = 1;
+                stack[i].value.objRef = newInt(0);
             }
             sp += imm;
             break;
@@ -504,45 +509,45 @@ void execInstr(void) {
         case EQ:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value == o2->value));
+            pushRef(newInt((*(int *)o1->data) == (*(int *)o2->data)));
             break;
         case NE:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value != o2->value));
+            pushRef(newInt((*(int *)o1->data) != (*(int *)o2->data)));
             break;
         case LT:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value < o2->value));
+            pushRef(newInt((*(int *)o1->data) < (*(int *)o2->data)));
             break;
         case LE:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value <= o2->value));
+            pushRef(newInt((*(int *)o1->data) <= (*(int *)o2->data)));
             break;
         case GT:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value > o2->value));
+            pushRef(newInt((*(int *)o1->data) > (*(int *)o2->data)));
             break;
         case GE:
             o2 = popRef();
             o1 = popRef();
-            pushRef(newInt(o1->value >= o2->value));
+            pushRef(newInt((*(int *)o1->data) >= (*(int *)o2->data)));
             break;
         case JMP:
             pc = imm;
             break;
         case BRF:
             o1 = popRef();
-            if (o1->value == 0) {
+            if ((*(int *)o1->data) == 0) {
                 pc = imm;
             }
             break;
         case BRT:
             o1 = popRef();
-            if (o1->value != 0) {
+            if ((*(int *)o1->data) != 0) {
                 pc = imm;
             }
             break;
@@ -834,7 +839,7 @@ int main(int argc, char *argv[]) {
         printf("Ninja Virtual Machine stopped\n");
     }
 
-    free(prog);
+    free(data);
 
     return 0;
 }
