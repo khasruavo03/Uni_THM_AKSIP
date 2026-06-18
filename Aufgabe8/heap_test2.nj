@@ -1,0 +1,28 @@
+void main() {
+    local Integer b;
+    b = 0;
+    while (b < 20) {
+        test();
+        b = b + 1;
+    }
+    writeString("success!\n");
+}
+
+void test() {
+    local Integer[][] a;
+    local Integer i;
+    local Integer j;
+
+    a = new(Integer[1000][]);
+    i = 0;
+
+    while (i < 1000) {
+        a[i] = new(Integer[20]);
+        j = 0;
+        while (j < 20) {
+            a[i][j]=i*1000+j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}

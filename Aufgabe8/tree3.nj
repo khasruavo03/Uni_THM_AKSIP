@@ -1,0 +1,95 @@
+//
+// tree3.nj -- compile tree for expression "5 - (1 + 3) * (4 - 7)"
+//
+
+type Node = record {
+  Boolean isLeaf;
+  Character op;
+  Node left;
+  Node right;
+  Integer num;
+};
+
+//--------------------------------------------------------------
+
+// nodes
+
+Node newLeafNode(Integer n) {
+  local Node res;
+  res = new(Node);
+  res.isLeaf = true;
+  res.num = n;
+  return res;
+}
+
+Node newInnerNode(Character op, Node left, Node right) {
+  local Node res;
+  res = new(Node);
+  res.isLeaf = false;
+  res.op = op;
+  res.left = left;
+  res.right = right;
+  return res;
+}
+
+//--------------------------------------------------------------
+
+// compile a tree
+
+void compileTree(Node tree) {
+  if (tree.isLeaf) {
+    writeString("\tpushc\t");
+    writeInteger(tree.num);
+    writeString("\n");
+  } else {
+    compileTree(tree.left);
+    compileTree(tree.right);
+    if (tree.op == '+') {
+      writeString("\tadd\n");
+      return;
+    }
+    if (tree.op == '-') {
+      writeString("\tsub\n");
+      return;
+    }
+    if (tree.op == '*') {
+      writeString("\tmul\n");
+      return;
+    }
+    if (tree.op == '/') {
+      writeString("\tdiv\n");
+      return;
+    }
+    writeString("error: unknown operation\n");
+    exit();
+  }
+}
+
+//--------------------------------------------------------------
+
+Node makeTree() {
+  local Node tree;
+  tree =
+    newInnerNode(
+      '-',
+      newLeafNode(5),
+      newInnerNode(
+        '*',
+        newInnerNode(
+          '+',
+          newLeafNode(1),
+          newLeafNode(3)),
+        newInnerNode(
+          '-',
+          newLeafNode(4),
+          newLeafNode(7))));
+  return tree;
+}
+
+void main() {
+  local Node tree;
+  tree = makeTree();
+  compileTree(tree);
+  writeString("\twrint\n");
+  writeString("\thalt\n");
+}
