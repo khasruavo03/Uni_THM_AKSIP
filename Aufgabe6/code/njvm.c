@@ -345,7 +345,8 @@ void inspStack(void) {
 
     for (int i = sp - 1; i >= 0; i--) {
         if (stack[i].is_ref) {
-            int val = *(int *)stack[i].value.objRef->data;
+            bip.op1 = stack[i].value.objRef;
+            int val = bigToInt();
             printf("%04d: obj@%p value=%d", i, (void *)stack[i].value.objRef, val);
         } else {
             printf("%04d: number =%d", i, stack[i].value.number);
@@ -368,7 +369,8 @@ void inspData(void) {
     printf("Global Data: \n");
     for (int i = 0; i < dataSize; i++) {
         if (data[i] != NULL) {
-            int val = *(int *)data[i]->data;
+            bip.op1 = data[i];
+            int val = bigToInt();
             printf("%04d: obj@%p value=%d\n", i, (void *)data[i], val);
         } else {
             printf("%04d: NULL\n", i);
@@ -382,7 +384,8 @@ void inspObject(ObjRef obj) {
         return;
     }
     printf("Object at %p:\n", (void *)obj);
-    printf("  value: %d\n", *(int *)obj->data);
+    bip.op1 = obj;
+    printf("  value: %d\n", bigToInt());
 }
 
 void inspObjectByAddr(void) {
@@ -536,47 +539,61 @@ void execInstr(void) {
             break;
         }
         case EQ:
-            o2 = popRef();
-            o1 = popRef();
-            pushRef(newInt((*(int *)o1->data) == (*(int *)o2->data)));
+                o2 = popRef();
+                o1 = popRef();
+                bip.op1 = o1;
+                bip.op2 = o2;
+                pushRef(newInt(bigCmp() == 0));
             break;
         case NE:
-            o2 = popRef();
-            o1 = popRef();
-            pushRef(newInt((*(int *)o1->data) != (*(int *)o2->data)));
+                o2 = popRef();
+                o1 = popRef();
+                bip.op1 = o1;
+                bip.op2 = o2;
+                pushRef(newInt(bigCmp() != 0));
             break;
         case LT:
-            o2 = popRef();
-            o1 = popRef();
-            pushRef(newInt((*(int *)o1->data) < (*(int *)o2->data)));
+                o2 = popRef();
+                o1 = popRef();
+                bip.op1 = o1;
+                bip.op2 = o2;
+                pushRef(newInt(bigCmp() < 0));
             break;
         case LE:
-            o2 = popRef();
-            o1 = popRef();
-            pushRef(newInt((*(int *)o1->data) <= (*(int *)o2->data)));
+                o2 = popRef();
+                o1 = popRef();
+                bip.op1 = o1;
+                bip.op2 = o2;
+                pushRef(newInt(bigCmp() <= 0));
             break;
         case GT:
-            o2 = popRef();
-            o1 = popRef();
-            pushRef(newInt((*(int *)o1->data) > (*(int *)o2->data)));
+                o2 = popRef();
+                o1 = popRef();
+                bip.op1 = o1;
+                bip.op2 = o2;
+                pushRef(newInt(bigCmp() > 0));
             break;
         case GE:
-            o2 = popRef();
-            o1 = popRef();
-            pushRef(newInt((*(int *)o1->data) >= (*(int *)o2->data)));
+                o2 = popRef();
+                o1 = popRef();
+                bip.op1 = o1;
+                bip.op2 = o2;
+                pushRef(newInt(bigCmp() >= 0));
             break;
         case JMP:
             pc = imm;
             break;
         case BRF:
             o1 = popRef();
-            if ((*(int *)o1->data) == 0) {
+            bip.op1 = o1;
+            if (bigToInt() == 0) {
                 pc = imm;
             }
             break;
         case BRT:
             o1 = popRef();
-            if ((*(int *)o1->data) != 0) {
+            bip.op1 = o1;
+            if (bigToInt() != 0) {
                 pc = imm;
             }
             break;
