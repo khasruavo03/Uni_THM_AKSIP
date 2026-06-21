@@ -474,7 +474,8 @@ void execInstr(void) {
         }
         case WRINT:
             o1 = popRef();
-            printf("%d", *(int *)o1->data);
+            bip.op1 = o1;
+            printf("%d", bigToInt());
             break;
         case RDCHR:
             o1 = newInt(getchar());
@@ -482,7 +483,8 @@ void execInstr(void) {
             break;
         case WRCHR:
             o1 = popRef();
-            putchar(*(int *)o1->data);
+            bip.op1 = o1;
+            putchar(bigToInt());
             break;
         case PUSHG:
             if (imm < 0 || imm >= dataSize) {
@@ -618,7 +620,6 @@ void execProg(void) {
         }
 
         execInstr();
-
         // printf("pc=%d opcode=%d imm=%d\n", pc-1, opcode, imm);
     }
 }
