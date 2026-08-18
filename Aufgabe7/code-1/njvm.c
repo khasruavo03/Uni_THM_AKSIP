@@ -67,13 +67,21 @@
 unsigned int* prog; // geladene Programmcode
 int progSize; 
 
+void printInstructionAt(FILE *stream, int index);
+extern int pc;
+extern int currentInstrPc;
+
 typedef struct {
     unsigned int size;
     unsigned char data[1];
 } *ObjRef;
 
 void fatalError(char *msg) {
-    fprintf(stderr, "Fatal error: %s\n", msg);
+    int idx = currentInstrPc >= 0 ? currentInstrPc : pc;
+    fprintf(stderr, "Fatal error at pc=%d: %s\n", idx, msg);
+    fprintf(stderr, "  instruction: ");
+    printInstructionAt(stderr, idx);
+    fprintf(stderr, "\n");
     exit(1);
 }
 
@@ -147,13 +155,149 @@ int fp = 0; // Frame Pointer
 int breakpoint = -1; // Breakpoint für Debugger
 int pc = 0; // Program Counter
 int halted = 0; // HALT Flag
+int currentInstrPc = -1;
 
 ObjRef rv = NULL; // Return-Value
 
+void printInstructionAt(FILE *stream, int index) {
+    if (index < 0 || index >= progSize) {
+        fprintf(stream, "<no instruction>");
+        return;
+    }
+
+    unsigned int instr = prog[index];
+    int opcode = OPCODE(instr);
+    int imm = SIGN_EXTEND(IMMEDIATE(instr));
+
+    fprintf(stream, "%04d:   ", index);
+
+    switch (opcode) {
+        case HALT:
+            fprintf(stream, "halt");
+            break;
+        case PUSHC:
+            fprintf(stream, "pushc   %d", imm);
+            break;
+        case RDINT:
+            fprintf(stream, "rdint");
+            break;
+        case WRINT:
+            fprintf(stream, "wrint");
+            break;
+        case PUSHG:
+            fprintf(stream, "pushg   %d", imm);
+            break;
+        case POPG:
+            fprintf(stream, "popg    %d", imm);
+            break;
+        case ADD:
+            fprintf(stream, "add");
+            break;
+        case SUB:
+            fprintf(stream, "sub");
+            break;
+        case MUL:
+            fprintf(stream, "mul");
+            break;
+        case DIV:
+            fprintf(stream, "div");
+            break;
+        case MOD:
+            fprintf(stream, "mod");
+            break;
+        case EQ:
+            fprintf(stream, "eq");
+            break;
+        case NE:
+            fprintf(stream, "ne");
+            break;
+        case LT:
+            fprintf(stream, "lt");
+            break;
+        case LE:
+            fprintf(stream, "le");
+            break;
+        case GT:
+            fprintf(stream, "gt");
+            break;
+        case GE:
+            fprintf(stream, "ge");
+            break;
+        case JMP:
+            fprintf(stream, "jmp     %d", imm);
+            break;
+        case BRF:
+            fprintf(stream, "brf     %d", imm);
+            break;
+        case BRT:
+            fprintf(stream, "brt     %d", imm);
+            break;
+        case CALL:
+            fprintf(stream, "call    %d", imm);
+            break;
+        case RET:
+            fprintf(stream, "ret");
+            break;
+        case DROP:
+            fprintf(stream, "drop    %d", imm);
+            break;
+        case PUSHR:
+            fprintf(stream, "pushr");
+            break;
+        case POPR:
+            fprintf(stream, "popr");
+            break;
+        case DUP:
+            fprintf(stream, "dup");
+            break;
+        case NEW:
+            fprintf(stream, "new     %d", imm);
+            break;
+        case GETF:
+            fprintf(stream, "getf    %d", imm);
+            break;
+        case PUTF:
+            fprintf(stream, "putf    %d", imm);
+            break;
+        case NEWA:
+            fprintf(stream, "newa");
+            break;
+        case GETFA:
+            fprintf(stream, "getfa");
+            break;
+        case PUTFA:
+            fprintf(stream, "putfa");
+            break;
+        case GETSZ:
+            fprintf(stream, "getsz");
+            break;
+        case PUSHN:
+            fprintf(stream, "pushn");
+            break;
+        case REFEQ:
+            fprintf(stream, "refeq");
+            break;
+        case REFNE:
+            fprintf(stream, "refne");
+            break;
+        default:
+            fprintf(stream, "unknown");
+            break;
+    }
+}
+
+void runtimeError(char *msg) {
+    int idx = currentInstrPc >= 0 ? currentInstrPc : pc;
+    fprintf(stderr, "Error at pc=%d: %s\n", idx, msg);
+    fprintf(stderr, "  instruction: ");
+    printInstructionAt(stderr, idx);
+    fprintf(stderr, "\n");
+    exit(1);
+}
+
 void pushRaw(int value) {
     if (sp >= 1024) {
-        fprintf(stderr, "Error: Stack overflow\n");
-        exit(1);
+        runtimeError("Stack overflow");
     }
     stack[sp].is_ref = 0;
     stack[sp].value.number = value;
@@ -162,8 +306,7 @@ void pushRaw(int value) {
 
 void pushRef(ObjRef ref) {
     if (sp >= 1024) {
-        fprintf(stderr, "Error: Stack overflow\n");
-        exit(1);
+        runtimeError("Stack overflow");
     }
     stack[sp].is_ref = 1;
     stack[sp].value.objRef = ref;
@@ -172,16 +315,14 @@ void pushRef(ObjRef ref) {
 
 void pushSlot(StackSlot slot) {
     if (sp >= 1024) {
-        fprintf(stderr, "Error: Stack overflow\n");
-        exit(1);
+        runtimeError("Stack overflow");
     }
     stack[sp++] = slot;
 }
 
 StackSlot popSlot(void) {
     if (sp <= 0) {
-        fprintf(stderr, "Error: Stack underflow\n");
-        exit(1);
+        runtimeError("Stack underflow");
     }
     return stack[--sp];
 }
@@ -189,8 +330,7 @@ StackSlot popSlot(void) {
 int popRaw(void) {
     StackSlot slot = popSlot();
     if (slot.is_ref) {
-        fprintf(stderr, "Error: Expected raw integer on stack, found object reference\n");
-        exit(1);
+        runtimeError("Expected raw integer on stack, found object reference");
     }
     return slot.value.number;
 }
@@ -198,8 +338,7 @@ int popRaw(void) {
 ObjRef popRef(void) {
     StackSlot slot = popSlot();
     if (!slot.is_ref) {
-        fprintf(stderr, "Error: Expected object reference on stack, found raw integer\n");
-        exit(1);
+        runtimeError("Expected object reference on stack, found raw integer");
     }
     return slot.value.objRef;
 }
@@ -493,12 +632,19 @@ void inspObjectByAddr(void) {
 
 // 
 void execInstr(void) {
+    currentInstrPc = pc;
     unsigned int instr = prog[pc];
     int opcode = (instr >> 24) & 0xFF;
     int imm = (int)SIGN_EXTEND(instr & 0x00FFFFFF);
     pc++;
     ObjRef o1, o2;
-    
+
+    printf("pc=%d opcode=%d imm=%d sp=%d fp=%d\n",
+       currentInstrPc,
+       opcode,
+       imm,
+       sp,
+       fp);
     switch (opcode) {
         case HALT:
             halted = 1;
@@ -588,8 +734,7 @@ void execInstr(void) {
             pushRaw(fp);
             fp = sp;
             if (sp + imm >= 1024) {
-                fprintf(stderr, "Error: Stack Overflow\n");
-                exit(1);
+                runtimeError("Stack Overflow");
             }
             for (int i = sp; i < sp + imm; i++) {
                 stack[i].is_ref = 1;
@@ -604,8 +749,11 @@ void execInstr(void) {
         case PUSHL: {
             int addr = fp + imm;
             if (addr < 0 || addr >= sp) {
-                fprintf(stderr, "Error: Illegal stack access\n");
-                exit(1);
+                printf("PUSHL: fp=%d imm=%d addr=%d sp=%d\n", fp, imm, addr, sp);
+                runtimeError("Illegal stack access");
+            }
+            if (!stack[addr].is_ref) {
+                runtimeError("PUSHL detected number in local or paramter variable");
             }
             pushSlot(stack[addr]);
             break;
@@ -613,8 +761,7 @@ void execInstr(void) {
         case POPL: {
             int addr = fp + imm;
             if (addr < 0 || addr >= sp) {
-                fprintf(stderr, "Error: Illegal stack access\n");
-                exit(1);
+                runtimeError("Illegal stack access");
             }
             stack[addr] = popSlot();
             break;
@@ -687,15 +834,13 @@ void execInstr(void) {
             break;
         case DROP:
             if (sp - imm < 0) {
-                fprintf(stderr, "Error: Stack underflow\n");
-                exit(1);
+                runtimeError("Stack underflow");
             }
             sp = sp - imm;
             break;
         case PUSHR:
             if (rv == NULL) {
-                fprintf(stderr, "Error: Return value register is empty\n");
-                exit(1);
+                runtimeError("Return value register is empty");
             }
             pushRef(rv);
             break;
@@ -711,8 +856,7 @@ void execInstr(void) {
             break;
         case NEW:
             if(imm < 0) {
-                fprintf(stderr, "Error: Illegal object size\n");
-                exit(1);
+                runtimeError("Illegal object size");
             }
             pushRef(newCompoundObject(imm));
             break;
@@ -743,19 +887,33 @@ void execInstr(void) {
                 fields[imm] = value;
             }
             break;
-        case NEWA:
-            {
+        case NEWA: {
+            /*{
                 int n = popRaw();
                 if (n < 0) {
                     fatalError("illegal array size\n");
                 }
                 pushRef(newCompoundObject(n));
             }
+            break;*/
+            ObjRef sizeObj = popRef();
+            bip.op1 = sizeObj;
+            int n = bigToInt();
+
+            if (n < 0) {
+                fatalError("Illegal Array Size");
+            }
+
+            pushRef(newCompoundObject(n));
             break;
+            }
         case GETFA:
             {
-                int i = popRaw();
+                ObjRef id_Obj = popRef();
+                bip.op1 = id_Obj;
+                int i = bigToInt();
                 o1 = popRef();
+
                 if(o1 == NULL) {
                     fatalError("NULL pointer reference access\n");
                 }
@@ -764,13 +922,16 @@ void execInstr(void) {
                 }
                 ObjRef *fields = (ObjRef *)o1->data;
                 pushRef(fields[i]);
+                break;
             }
-            break;
         case PUTFA:
             {
                 ObjRef value = popRef();
-                int i = popRaw();
+                ObjRef id_Obj = popRef();
+                bip.op1 = id_Obj;
+                int i = bigToInt();
                 o1 = popRef();
+                
                 if (o1 == NULL) {
                     fatalError("NULL Pointer Reference Access");
                 }
@@ -779,14 +940,14 @@ void execInstr(void) {
                 }
                 ObjRef *fields = (ObjRef *)o1->data;
                 fields[i] = value;
+                break;
             }
-            break;
         case GETSZ:
             o1 = popRef();
             if (o1 == NULL) {
                 fatalError("NULL Pointer Reference Access");
             }
-            pushRaw((int)GET_SIZE(o1));
+            pushRef(newInt(GET_SIZE(o1)));
             break;
         case PUSHN:
             pushRef(NULL);
@@ -801,7 +962,7 @@ void execInstr(void) {
         case REFNE:
             o2 = popRef();
             o1 = popRef();
-            pushRaw(o1 == o2);
+            pushRaw(o1 != o2);
             break;
     }
 }
@@ -825,146 +986,7 @@ void printCurrentInstr(void) {
         return;
     }
 
-    unsigned int instr = prog[pc];
-    int opcode = OPCODE(instr);
-    int imm = SIGN_EXTEND(IMMEDIATE(instr));
-
-    printf("%04d:   ", pc);
-
-    switch(opcode) {
-        case HALT:
-            printf("halt");
-            break;
-
-        case PUSHC:
-            printf("pushc   %d", imm);
-            break;
-
-        case RDINT:
-            printf("rdint");
-            break;
-
-        case WRINT:
-            printf("wrint");
-            break;
-
-        case PUSHG:
-            printf("pushg   %d", imm);
-            break;
-
-        case POPG:
-            printf("popg    %d", imm);
-            break;
-
-        case ADD:
-            printf("add");
-            break;
-
-        case SUB:
-            printf("sub");
-            break;
-
-        case MUL:
-            printf("mul");
-            break;
-
-        case DIV:
-            printf("div");
-            break;
-
-        case MOD:
-            printf("mod");
-            break;
-
-        case EQ:
-            printf("eq");
-            break;
-
-        case NE:
-            printf("ne");
-            break;
-
-        case LT:
-            printf("lt");
-            break;
-
-        case LE:
-            printf("le");
-            break;
-
-        case GT:
-            printf("gt");
-            break;
-
-        case GE:
-            printf("ge");
-            break;
-
-        case JMP:
-            printf("jmp     %d", imm);
-            break;
-
-        case BRF:
-            printf("brf     %d", imm);
-            break;
-
-        case BRT:
-            printf("brt     %d", imm);
-            break;
-            case 26:
-                printf("call    %d", imm);
-                break;
-            case 27:
-                printf("ret");
-                break;
-            case 28:
-                printf("drop    %d", imm);
-                break;
-            case 29:
-                printf("pushr");
-                break;
-            case 30:
-                printf("popr");
-                break;
-            case 31:
-                printf("dup");
-                break;
-                case 32: 
-                printf("new     %d", imm);
-                break;
-            case 33:
-                printf("getf    %d", imm);
-                break;
-            case 34: 
-                printf("putf    %d", imm);
-                break;
-            case 35:
-                printf("newa");
-                break;
-            case 36: 
-                printf("getfa");
-                break;
-            case 37: 
-                printf("putfa");
-                break;
-            case 38:
-                printf("getsz");
-                break;
-            case 39:
-                printf("pushn");
-                break;
-            case 40:
-                printf("refeq");
-                break;
-            case 41:
-                printf("refne");
-                break;
-
-
-        default:
-            printf("unknown");
-    }
-
+    printInstructionAt(stdout, pc);
     printf("\n");
 }
 
@@ -1088,6 +1110,7 @@ int main(int argc, char *argv[]) {
         printf("DEBUG: file '%s' loaded (code size = %d, data size = %d)\n", filename, progSize, dataSize);
         debugger();
     } else {
+        
         execProg();
         printf("Ninja Virtual Machine stopped\n");
     }
